@@ -110,6 +110,9 @@ func generatePrompt(targetTokens int, epoch int) string {
 // kBytesPerElement returns bytes per K element for the given mode.
 func kBytesPerElement(kvMode string, headDim int) float64 {
 	switch kvMode {
+	case "tq4", "tq4k":
+		// 4 bits packed + 1 f32 scale per headDim elements
+		return float64(4)/8 + float64(4)/float64(headDim)
 	case "tq3", "tq3k":
 		// 3 bits packed + 1 f32 scale per headDim elements
 		return float64(3)/8 + float64(4)/float64(headDim)
@@ -130,7 +133,7 @@ func kBytesPerElement(kvMode string, headDim int) float64 {
 // vBytesPerElement returns bytes per V element for the given mode.
 // K-only presets (tq2k/tq3k) keep V as f16.
 func vBytesPerElement(kvMode string, headDim int) float64 {
-	if kvMode == "tq2k" || kvMode == "tq3k" {
+	if kvMode == "tq2k" || kvMode == "tq3k" || kvMode == "tq4k" {
 		return 2 // f16
 	}
 	return kBytesPerElement(kvMode, headDim)
@@ -862,9 +865,9 @@ func isOOM(err error) bool {
 func main() {
 	var (
 		binary     = flag.String("binary", "ollama", "Path to ollama binary")
-		modelsStr  = flag.String("models", "llama3.2:3b,qwen2.5:7b,qwen3.5:9b", "Comma-separated list of models")
-		contextsStr = flag.String("contexts", "2048,4096,8192,16384,32768", "Comma-separated context sizes")
-		kvModesStr  = flag.String("kv-modes", "f16,tq3", "Comma-separated KV cache modes")
+		modelsStr  = flag.String("models", "llama3.2:3b,llama3.1:8b,qwen2.5:7b", "Comma-separated list of models")
+		contextsStr = flag.String("contexts", "4096,32768,65536", "Comma-separated context sizes")
+		kvModesStr  = flag.String("kv-modes", "f16,tq2,tq3,tq4,tq4k", "Comma-separated KV cache modes")
 		epochs     = flag.Int("epochs", 3, "Number of timed epochs per cell")
 		warmup     = flag.Int("warmup", 1, "Number of warmup iterations per cell")
 		predict    = flag.Int("predict", 128, "Number of decode tokens to generate")
