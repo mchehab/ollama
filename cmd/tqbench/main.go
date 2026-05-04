@@ -791,11 +791,11 @@ func run(cfg config) error {
 						r.DecodeTokSec = tokSec(decodeTok, decodeDur)
 						r.PPL = cellPPL
 						if cfg.ppl && cellPPL > 0 {
-							fmt.Fprintf(os.Stderr, "  epoch %d: prefill=%.1f tok/s decode=%.1f tok/s PPL=%.4f\n",
-								epoch, r.PrefillTokSec, r.DecodeTokSec, r.PPL)
+							fmt.Fprintf(os.Stderr, "  epoch %d: prefill=%.1f tok/s decode=%.1f tok/s PPL=%.4f VRAM=%.4f MB\n",
+								epoch, r.PrefillTokSec, r.DecodeTokSec, r.PPL, r.SizeVRAMMB)
 						} else {
-							fmt.Fprintf(os.Stderr, "  epoch %d: prefill=%.1f tok/s decode=%.1f tok/s\n",
-								epoch, r.PrefillTokSec, r.DecodeTokSec)
+							fmt.Fprintf(os.Stderr, "  epoch %d: prefill=%.1f tok/s decode=%.1f tok/s VRAM=%.4f MB\n",
+								epoch, r.PrefillTokSec, r.DecodeTokSec, r.SizeVRAMMB)
 						}
 					}
 					results = append(results, r)
