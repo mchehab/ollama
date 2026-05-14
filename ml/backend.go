@@ -408,8 +408,142 @@ const (
 	DTypeQ80
 	DTypeQ40
 	DTypeI32
+	DTypeI8
+	DTypeI16
 	DTypeMXFP4
+	DTypeTQ2
+	DTypeTQ3
+	DTypeTQ3K
+	DTypeTQ2K
+	DTypeTQ4
+	DTypeTQ4K
 )
+
+// TQCompressedKManager manages GPU-resident packed N-bit key indices for
+// TurboQuant VRAM compression. Implemented by the ggml backend.
+//
+// Two addressing shapes:
+//
+//   - Range (EncodeK, DequantK, ...): dense token i maps to physical cache
+//     slot firstCell+i. Used by plain Causal where Causal.findLocs hands
+//     back a contiguous run.
+//
+//   - Indexed (EncodeKAt, DequantKAt, ...): dense token i maps to physical
+//     cache slot locs[i]. The locs tensor is [N]i32 from Causal.curLocs.
+//     Used by sliding-window caches whose eviction fragments free cells.
+//
+// Both shapes hit the same kernels; the indexed APIs pass locs as an
+// optional source tensor and the kernel branches block-uniformly.
+type TQCompressedKManager interface {
+	// EnsureLayer allocates per-layer GPU tensors (packed + scales) on first use.
+	// capacity = total cache cell count for this layer.
+	EnsureLayer(layer, capacity int)
+
+	// EncodeK creates a GGML_OP_TQ_ENCODE graph node that encodes key vectors
+	// into the persistent compressed buffer. Returns a view of the packed buffer;
+	// pass this result to DequantK to establish the graph ordering dependency.
+	// key:       [headDim, numKVHeads, batchSize] f16
+	// firstCell: first cache slot index; cells are sequential (firstCell+0, +1, ...)
+	EncodeK(ctx Context, layer int, key Tensor, firstCell int) Tensor
+
+	// EncodeKAt is the indexed counterpart of EncodeK. Token i writes to
+	// physical cache slot locs[i]. locs: [batchSize]i32.
+	EncodeKAt(ctx Context, layer int, key Tensor, locs Tensor) Tensor
+
+	// DequantK creates a GGML_OP_TQ_DEQUANT graph node returning
+	// [headDim, numKVHeads, nCells] f16 ready for flash attention.
+	// encodeResult is the tensor returned by EncodeK for this layer+step,
+	// establishing encode→dequant ordering in the ggml graph.
+	DequantK(ctx Context, layer int, encodeResult Tensor, firstCell, nCells int) Tensor
+
+	// DequantKAt is the indexed counterpart of DequantK. Output[i] is
+	// populated from physical cache slot locs[i]. locs: [nCells]i32.
+	DequantKAt(ctx Context, layer int, encodeResult Tensor, locs Tensor) Tensor
+
+	// GetAsTQTensor returns a tqTensor wrapping the packed K buffer for the
+	// fused TQ flash-attention path.  Returns (nil, false) when the config is
+	// not supported by the fused kernel — callers must fall back to DequantK in that case.
+	GetAsTQTensor(ctx Context, layer int, encodeResult Tensor, firstCell, nCells int) (Tensor, bool)
+
+	// GetAsTQTensorAt is the indexed counterpart of GetAsTQTensor. The fused
+	// FA kernel reads K (and outliers) from physical slot locs[i] for dense
+	// cell i. locs: [nCells]i32.
+	GetAsTQTensorAt(ctx Context, layer int, encodeResult Tensor, locs Tensor) (Tensor, bool)
+
+	// GetAsTQTensorKV returns a tqTensor wrapping both packed K and packed V
+	// buffers for the fully fused K+V TQ flash-attention path. Returns (nil, false)
+	// when fused is not supported or V compression is not active.
+	GetAsTQTensorKV(ctx Context, layer int, kEncodeResult, vEncodeResult Tensor, firstCell, nCells int) (Tensor, bool)
+
+	// GetAsTQTensorKVAt is the indexed counterpart of GetAsTQTensorKV.
+	// locs: [nCells]i32.
+	GetAsTQTensorKVAt(ctx Context, layer int, kEncodeResult, vEncodeResult Tensor, locs Tensor) (Tensor, bool)
+
+	// EnsureVLayer allocates per-layer V packed and scales tensors on first use.
+	EnsureVLayer(layer, capacity int)
+
+	// EncodeV creates a GGML_OP_TQ_ENCODE_V graph node encoding value vectors
+	// into the persistent compressed V buffer. Returns a view of the V packed buffer.
+	EncodeV(ctx Context, layer int, value Tensor, firstCell int) Tensor
+
+	// EncodeVAt is the indexed counterpart of EncodeV. locs: [batchSize]i32.
+	EncodeVAt(ctx Context, layer int, value Tensor, locs Tensor) Tensor
+
+	// DequantV creates a GGML_OP_TQ_DEQUANT graph node returning
+	// [headDim, numKVHeads, nCells] f16 for V, ready for flash attention.
+	DequantV(ctx Context, layer int, encodeResult Tensor, firstCell, nCells int) Tensor
+
+	// DequantVAt is the indexed counterpart of DequantV. locs: [nCells]i32.
+	DequantVAt(ctx Context, layer int, encodeResult Tensor, locs Tensor) Tensor
+
+	// DequantKV creates a single GGML_OP_TQ_DEQUANT_KV graph node that dequants
+	// both K and V in one op, halving GGML scheduler overhead.
+	// Returns (key, value) as [headDim, numKVHeads, nCells] f16 views.
+	DequantKV(ctx Context, layer int, kEncodeResult, vEncodeResult Tensor, firstCell, nCells int) (Tensor, Tensor)
+
+	// DequantKVAt is the indexed counterpart of DequantKV. locs: [nCells]i32.
+	DequantKVAt(ctx Context, layer int, kEncodeResult, vEncodeResult Tensor, locs Tensor) (Tensor, Tensor)
+
+	// EncodeKV creates a single GGML_OP_TQ_ENCODE_KV graph node encoding both
+	// K and V, halving scheduler overhead vs separate EncodeK + EncodeV.
+	EncodeKV(ctx Context, layer int, key, value Tensor, firstCell int) (Tensor, Tensor)
+
+	// EncodeKVAt is the indexed counterpart of EncodeKV. locs: [batchSize]i32.
+	EncodeKVAt(ctx Context, layer int, key, value Tensor, locs Tensor) (Tensor, Tensor)
+
+	// HasRotation reports whether a WHT rotation is active. When true, DequantK
+	// and DequantV produce WHT-domain tensors that require undo before stock FA.
+	HasRotation() bool
+
+	// WHTUndo applies the Walsh-Hadamard inverse (sign flip + butterfly) to t
+	// using the per-layer sign tensor. Returns t unchanged when HasRotation() is
+	// false or t is nil. Use after DequantK / DequantV for the prefill path so
+	// unrotated Q can be used with stock flash attention.
+	WHTUndo(ctx Context, layer int, t Tensor) Tensor
+
+	// SupportsFusedDequantKWHT reports whether DequantK will produce plain
+	// (unrotated) f16 K via the fused dequant+WHT kernel for this preset.
+	// Currently true on CUDA, ROCm, and Metal when the preset has rotation +
+	// outliers + asymmetric. Callers gate path 2c on this to confirm
+	// DequantK's output won't need a separate WHT-undo node — the GGML
+	// allocator then collapses the K scratch across layers cleanly even on
+	// multi-sub-cache models (gemma).
+	SupportsFusedDequantKWHT() bool
+
+	// Close frees all GPU buffers.
+	Close()
+}
+
+// TQCompressedKBackend is implemented by backends that support TQ compressed K.
+//
+// outlierBits/outlierCount: optional post-rotation outlier split. When
+// outlierCount > 0, the manager allocates additional per-layer tensors for an
+// outlier sub-block at the specified bit width and the encode/dequant kernels
+// route through the outlier-aware path. Set outlierCount = 0 for pure uniform
+// per-channel Lloyd-Max at `bits` (historical behavior).
+type TQCompressedKBackend interface {
+	NewTQCompressedKManager(headDim, numKVHeads, bits int, rotationSeed uint64, vBits, outlierBits, outlierCount int, asymmetricPrimary bool) TQCompressedKManager
+}
 
 type SamplingMode int
 
