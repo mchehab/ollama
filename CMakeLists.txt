@@ -41,6 +41,7 @@ set(GGML_LLAMAFILE ON)
 set(GGML_CUDA_PEER_MAX_BATCH_SIZE 128)
 set(GGML_CUDA_GRAPHS ON)
 set(GGML_CUDA_FA ON)
+set(GGML_CUDA_FA_ALL_QUANTS OFF)
 set(GGML_CUDA_COMPRESSION_MODE default)
 
 if((CMAKE_OSX_ARCHITECTURES AND NOT CMAKE_OSX_ARCHITECTURES MATCHES "arm64")
@@ -115,6 +116,11 @@ if(CMAKE_CUDA_COMPILER)
     endif()
 
     find_package(CUDAToolkit)
+    if(MSVC)
+        # CUDA 13 headers use __VA_OPT__ and other C++20 preprocessor features
+        # that require MSVC's conformant preprocessor (/Zc:preprocessor).
+        string(APPEND CMAKE_CUDA_FLAGS " -Xcompiler /Zc:preprocessor")
+    endif()
     add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/ml/backend/ggml/ggml/src/ggml-cuda)
     target_include_directories(ggml-cuda PRIVATE ${GGML_INCLUDE_DIRS})
     install(TARGETS ggml-cuda
