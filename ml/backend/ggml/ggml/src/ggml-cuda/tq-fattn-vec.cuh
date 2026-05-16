@@ -601,7 +601,14 @@ static __global__ void tq_flash_attn_ext_vec(
             //   o_pos_lane[outlier_count/nthreads_KQ_max] — outlier head-dim positions
             // ----------------------------------------------------------------
 
-            const uint8_t * packed_row = K_packed + (int64_t)cell_addr * nKVHeads * packedBytes;
+            // Clamp cell_addr to 0 for out-of-range lanes. The K decode below
+            // is unconditional across the warp (needed for shfl convergence);
+            // gating only the result via in_range still issues the load, so
+            // an unclamped cell_addr would dereference past K_packed end.
+            // Cell 0 is always valid; the dequantized k_val is discarded by
+            // softmax masking downstream for out-of-range cells.
+            const int safe_cell_addr = in_range ? cell_addr : 0;
+            const uint8_t * packed_row = K_packed + (int64_t)safe_cell_addr * nKVHeads * packedBytes;
             const float     rms_scale  = in_range ? scales[cell_addr * nKVHeads] : 0.0f;
 
             // Regular-stream decode: hoisted out of `j`.
@@ -650,8 +657,11 @@ static __global__ void tq_flash_attn_ext_vec(
             [[maybe_unused]] float o_val_lane[O_PER_LANE];
             [[maybe_unused]] int   o_pos_lane[O_PER_LANE];
             if constexpr (HAS_OUTLIERS) {
+                // Same clamp as the regular K_packed pointer above: the
+                // tq_decode_elem call in the outlier loop is unconditional, so
+                // an unclamped cell_addr would OOB on out-of-range lanes.
                 const uint8_t * o_packed_row = outlier_packed
-                    + (int64_t)cell_addr * nKVHeads * outlier_packedBytes;
+                    + (int64_t)safe_cell_addr * nKVHeads * outlier_packedBytes;
                 const float o_rms = in_range
                     ? outlier_scales[cell_addr * nKVHeads] : 0.0f;
                 const float * outlier_codebook_ptr = codebook + (1 << bits);
@@ -787,8 +797,14 @@ static __global__ void tq_flash_attn_ext_vec(
                 const int cell_rel = k_VKQ_0 + k;
                 const bool   v_in_range = (cell_rel < nCells);
                 const int    v_cell_addr = (indexed && v_in_range) ? (int)locs[cell_rel] : cell_rel;
+                // Clamp v_cell_addr to 0 for out-of-range lanes (matches the K
+                // decode clamp above). tq_decode_N_shfl below is unconditional
+                // to keep all lanes convergent for the shuffles, so an
+                // unclamped v_cell_addr would dereference past V_packed end.
+                // v_rms=0 still discards the decoded value mathematically.
+                const int v_safe_cell_addr = v_in_range ? v_cell_addr : 0;
                 const uint8_t * v_row = V_packed_base
-                    + (int64_t)v_cell_addr * nKVHeads * v_packedBytes;
+                    + (int64_t)v_safe_cell_addr * nKVHeads * v_packedBytes;
                 const float v_rms = v_in_range
                     ? v_scales_base[v_cell_addr * nKVHeads] : 0.0f;
 
