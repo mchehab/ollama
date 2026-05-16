@@ -18,7 +18,8 @@ import (
 //
 // Set OLLAMA_TEST_DLL_DIRS to a semicolon-separated list of dirs to add.
 // Example:
-//   OLLAMA_TEST_DLL_DIRS="C:\Program Files\AMD\ROCm\7.1\bin;C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.2\bin"
+//
+//	OLLAMA_TEST_DLL_DIRS="C:\Program Files\AMD\ROCm\7.1\bin;C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.2\bin"
 func init() {
 	dllInitOnce.Do(addTestDllDirs)
 }
@@ -71,7 +72,7 @@ func addTestDllDirs() {
 			os.Stderr.WriteString("dll_search: AddDllDirectory failed for " + dir + ": " + err.Error() + "\n")
 			continue
 		}
-		os.Stderr.WriteString("dll_search: AddDllDirectory(" + dir + ") cookie=" + uintptrToHex(uintptr(cookie)) + "\n")
+		os.Stderr.WriteString("dll_search: AddDllDirectory(" + dir + ") cookie=" + uintptrToHex(cookie) + "\n")
 	}
 
 	// Sanity: also pre-load the key transitive deps by full path so they're
