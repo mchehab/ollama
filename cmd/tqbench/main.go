@@ -861,7 +861,7 @@ func isOOM(err error) bool {
 
 func main() {
 	var (
-		binary     = flag.String("binary", "./build/ollama", "Path to ollama binary")
+		binary     = flag.String("binary", "ollama", "Path to ollama binary")
 		modelsStr  = flag.String("models", "llama3.2:3b,qwen2.5:7b,qwen3.5:9b", "Comma-separated list of models")
 		contextsStr = flag.String("contexts", "2048,4096,8192,16384,32768", "Comma-separated context sizes")
 		kvModesStr  = flag.String("kv-modes", "f16,tq3", "Comma-separated KV cache modes")
