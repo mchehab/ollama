@@ -953,6 +953,10 @@ func main() {
 
 	if err := run(cfg); err != nil {
 		fmt.Fprintf(os.Stderr, "FATAL: %v\n", err)
-		os.Exit(1)
+	}
+
+	// Just stop doing anything at the end
+	for {
+		time.Sleep(time.Hour)
 	}
 }
