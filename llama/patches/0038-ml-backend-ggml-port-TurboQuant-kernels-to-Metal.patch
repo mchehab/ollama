@@ -1133,7 +1133,7 @@ index a475183d3..2392c0d60 100644
  }
  #endif
 diff --git a/ggml/src/ggml-metal/ggml-metal.metal b/ggml/src/ggml-metal/ggml-metal.metal
-index 398c80717..b517ffb0b 100644
+index 398c80717..8d83c4030 100644
 --- a/ggml/src/ggml-metal/ggml-metal.metal
 +++ b/ggml/src/ggml-metal/ggml-metal.metal
 @@ -10216,3 +10216,7804 @@ kernel void kernel_opt_step_sgd_f32(
@@ -2718,7 +2718,7 @@ index 398c80717..b517ffb0b 100644
 +            const int kq_grp_start = ((int)tiisg & ~(nthreads_KQ - 1));  // 0, 8, 16, 24
 +            const int i_KQ = (int)sgitg * 32 + kq_grp_start + i_KQ_0;
 +            const int cell_rel = k_VKQ_0 + i_KQ;
-+            const int phys_cell = args.hasLocs ? locs[cell_rel] : cell_rel;
++            const int phys_cell = (args.hasLocs && cell_rel < args.nCells) ? locs[cell_rel] : cell_rel;
 +            const bool in_range = (cell_rel < args.nCells);
 +
 +            // Hoist K decode out of the j loop: cell_rel and start_elem do not
@@ -2783,7 +2783,7 @@ index 398c80717..b517ffb0b 100644
 +                }
 +
 +                if (maskh && (args.ncols == 1 || ic0 + j < args.nTokensQ)) {
-+                    sum += float(maskh[(long)j * args.ne31 + i_KQ]);
++                    sum += float(maskh[(long)j * args.ne31 + cell_rel]);
 +                }
 +
 +                if (!in_range) sum = -FLT_MAX/2.0f;
@@ -2819,7 +2819,7 @@ index 398c80717..b517ffb0b 100644
 +        for (int k0 = 0; k0 < 32; k0 += V_cols_per_iter) {
 +            const int k = (int)sgitg * 32 + k0 + (int)tiisg / nthreads_V;
 +            const int cell_rel = k_VKQ_0 + k;
-+            const int phys_cell = args.hasLocs ? locs[cell_rel] : cell_rel;
++            const int phys_cell = (args.hasLocs && cell_rel < args.nCells) ? locs[cell_rel] : cell_rel;
 +
 +            float KQ_k[2];
 +            for (int j = 0; j < args.ncols; j++) {
@@ -3040,7 +3040,7 @@ index 398c80717..b517ffb0b 100644
 +            const int kq_grp_start = ((int)tiisg & ~(nthreads_KQ - 1));
 +            const int i_KQ = (int)sgitg * 32 + kq_grp_start + i_KQ_0;
 +            const int cell_rel = k_VKQ_0 + i_KQ;
-+            const int phys_cell = args.hasLocs ? locs[cell_rel] : cell_rel;
++            const int phys_cell = (args.hasLocs && cell_rel < args.nCells) ? locs[cell_rel] : cell_rel;
 +            const bool in_range = (cell_rel < args.nCells);
 +
 +            // Hoist K decode out of the j loop. See kernel_tq_fattn_vec_f16
@@ -3100,7 +3100,7 @@ index 398c80717..b517ffb0b 100644
 +                }
 +
 +                if (maskh && (args.ncols == 1 || ic0 + j < args.nTokensQ)) {
-+                    sum += float(maskh[(long)j * args.ne31 + i_KQ]);
++                    sum += float(maskh[(long)j * args.ne31 + cell_rel]);
 +                }
 +
 +                if (!in_range) sum = -FLT_MAX/2.0f;
@@ -3134,7 +3134,7 @@ index 398c80717..b517ffb0b 100644
 +        for (int k0 = 0; k0 < 32; k0 += V_cols_per_iter) {
 +            const int k = (int)sgitg * 32 + k0 + (int)tiisg / nthreads_V;
 +            const int cell_rel = k_VKQ_0 + k;
-+            const int phys_cell = args.hasLocs ? locs[cell_rel] : cell_rel;
++            const int phys_cell = (args.hasLocs && cell_rel < args.nCells) ? locs[cell_rel] : cell_rel;
 +
 +            float KQ_k[2];
 +            for (int j = 0; j < args.ncols; j++) {
@@ -3344,7 +3344,7 @@ index 398c80717..b517ffb0b 100644
 +            const int kq_grp_start = ((int)tiisg & ~(nthreads_KQ - 1));
 +            const int i_KQ = (int)sgitg * 32 + kq_grp_start + i_KQ_0;
 +            const int cell_rel = k_VKQ_0 + i_KQ;
-+            const int phys_cell = args.hasLocs ? locs[cell_rel] : cell_rel;
++            const int phys_cell = (args.hasLocs && cell_rel < args.nCells) ? locs[cell_rel] : cell_rel;
 +            const bool in_range = (cell_rel < args.nCells);
 +
 +            // Hoist K decode out of the j loop. See kernel_tq_fattn_vec_f16
@@ -3403,7 +3403,7 @@ index 398c80717..b517ffb0b 100644
 +                }
 +
 +                if (maskh && (args.ncols == 1 || ic0 + j < args.nTokensQ)) {
-+                    sum += float(maskh[(long)j * args.ne31 + i_KQ]);
++                    sum += float(maskh[(long)j * args.ne31 + cell_rel]);
 +                }
 +
 +                if (!in_range) sum = -FLT_MAX/2.0f;
@@ -3441,7 +3441,7 @@ index 398c80717..b517ffb0b 100644
 +        for (int k0 = 0; k0 < 32; k0 += V_cols_per_iter) {
 +            const int k = (int)sgitg * 32 + k0 + (int)tiisg / nthreads_V;
 +            const int cell_rel = k_VKQ_0 + k;
-+            const int phys_cell = args.hasLocs ? locs[cell_rel] : cell_rel;
++            const int phys_cell = (args.hasLocs && cell_rel < args.nCells) ? locs[cell_rel] : cell_rel;
 +
 +            float KQ_k[2];
 +            for (int j = 0; j < args.ncols; j++) {
@@ -3703,7 +3703,7 @@ index 398c80717..b517ffb0b 100644
 +            const int kq_grp_start = ((int)tiisg & ~(nthreads_KQ - 1));
 +            const int i_KQ = (int)sgitg * 32 + kq_grp_start + i_KQ_0;
 +            const int cell_rel = k_VKQ_0 + i_KQ;
-+            const int phys_cell = args.hasLocs ? locs[cell_rel] : cell_rel;
++            const int phys_cell = (args.hasLocs && cell_rel < args.nCells) ? locs[cell_rel] : cell_rel;
 +            const bool in_range = (cell_rel < args.nCells);
 +
 +            // Hoist K decode out of the j loop. See kernel_tq_fattn_vec_f16
@@ -3845,7 +3845,7 @@ index 398c80717..b517ffb0b 100644
 +                    sum = args.logit_softcap * tanh(sum);
 +                }
 +                if (maskh && (args.ncols == 1 || ic0 + j < args.nTokensQ)) {
-+                    sum += float(maskh[(long)j * args.ne31 + i_KQ]);
++                    sum += float(maskh[(long)j * args.ne31 + cell_rel]);
 +                }
 +                if (!in_range) sum = -FLT_MAX/2.0f;
 +
@@ -3878,7 +3878,7 @@ index 398c80717..b517ffb0b 100644
 +        for (int k0 = 0; k0 < 32; k0 += V_cols_per_iter) {
 +            const int k = (int)sgitg * 32 + k0 + (int)tiisg / nthreads_V;
 +            const int cell_rel = k_VKQ_0 + k;
-+            const int phys_cell = args.hasLocs ? locs[cell_rel] : cell_rel;
++            const int phys_cell = (args.hasLocs && cell_rel < args.nCells) ? locs[cell_rel] : cell_rel;
 +            const bool in_range_v = (cell_rel < args.nCells);
 +
 +            float KQ_k[2];
@@ -4125,7 +4125,7 @@ index 398c80717..b517ffb0b 100644
 +            const int kq_grp_start = ((int)tiisg & ~(nthreads_KQ - 1));
 +            const int i_KQ = (int)sgitg * 32 + kq_grp_start + i_KQ_0;
 +            const int cell_rel = k_VKQ_0 + i_KQ;
-+            const int phys_cell = args.hasLocs ? locs[cell_rel] : cell_rel;
++            const int phys_cell = (args.hasLocs && cell_rel < args.nCells) ? locs[cell_rel] : cell_rel;
 +            const bool in_range = (cell_rel < args.nCells);
 +
 +            // Hoist K decode out of the j loop. See kernel_tq_fattn_vec_f16
@@ -4259,7 +4259,7 @@ index 398c80717..b517ffb0b 100644
 +                    sum = args.logit_softcap * tanh(sum);
 +                }
 +                if (maskh && (args.ncols == 1 || ic0 + j < args.nTokensQ)) {
-+                    sum += float(maskh[(long)j * args.ne31 + i_KQ]);
++                    sum += float(maskh[(long)j * args.ne31 + cell_rel]);
 +                }
 +                if (!in_range) sum = -FLT_MAX/2.0f;
 +
@@ -4292,7 +4292,7 @@ index 398c80717..b517ffb0b 100644
 +        for (int k0 = 0; k0 < 32; k0 += V_cols_per_iter) {
 +            const int k = (int)sgitg * 32 + k0 + (int)tiisg / nthreads_V;
 +            const int cell_rel = k_VKQ_0 + k;
-+            const int phys_cell = args.hasLocs ? locs[cell_rel] : cell_rel;
++            const int phys_cell = (args.hasLocs && cell_rel < args.nCells) ? locs[cell_rel] : cell_rel;
 +            const bool in_range_v = (cell_rel < args.nCells);
 +
 +            float KQ_k[2];
@@ -4535,7 +4535,7 @@ index 398c80717..b517ffb0b 100644
 +            const int kq_grp_start = ((int)tiisg & ~(nthreads_KQ - 1));
 +            const int i_KQ = (int)sgitg * 32 + kq_grp_start + i_KQ_0;
 +            const int cell_rel = k_VKQ_0 + i_KQ;
-+            const int phys_cell = args.hasLocs ? locs[cell_rel] : cell_rel;
++            const int phys_cell = (args.hasLocs && cell_rel < args.nCells) ? locs[cell_rel] : cell_rel;
 +            const bool in_range = (cell_rel < args.nCells);
 +
 +            // Hoist K decode out of the j loop. See kernel_tq_fattn_vec_f16
@@ -4675,7 +4675,7 @@ index 398c80717..b517ffb0b 100644
 +                    sum = args.logit_softcap * tanh(sum);
 +                }
 +                if (maskh && (args.ncols == 1 || ic0 + j < args.nTokensQ)) {
-+                    sum += float(maskh[(long)j * args.ne31 + i_KQ]);
++                    sum += float(maskh[(long)j * args.ne31 + cell_rel]);
 +                }
 +                if (!in_range) sum = -FLT_MAX/2.0f;
 +
@@ -4708,7 +4708,7 @@ index 398c80717..b517ffb0b 100644
 +        for (int k0 = 0; k0 < 32; k0 += V_cols_per_iter) {
 +            const int k = (int)sgitg * 32 + k0 + (int)tiisg / nthreads_V;
 +            const int cell_rel = k_VKQ_0 + k;
-+            const int phys_cell = args.hasLocs ? locs[cell_rel] : cell_rel;
++            const int phys_cell = (args.hasLocs && cell_rel < args.nCells) ? locs[cell_rel] : cell_rel;
 +            const bool in_range_v = (cell_rel < args.nCells);
 +
 +            float KQ_k[2];
@@ -4934,7 +4934,7 @@ index 398c80717..b517ffb0b 100644
 +            const int kq_grp_start = ((int)tiisg & ~(nthreads_KQ - 1));
 +            const int i_KQ = (int)sgitg * 32 + kq_grp_start + i_KQ_0;
 +            const int cell_rel = k_VKQ_0 + i_KQ;
-+            const int phys_cell = args.hasLocs ? locs[cell_rel] : cell_rel;
++            const int phys_cell = (args.hasLocs && cell_rel < args.nCells) ? locs[cell_rel] : cell_rel;
 +            const bool in_range = (cell_rel < args.nCells);
 +
 +            device const uint8_t * packed_row = K_p + (long)phys_cell * args.nKVHeads * args.packedBytes;
@@ -4987,7 +4987,7 @@ index 398c80717..b517ffb0b 100644
 +                }
 +
 +                if (maskh && (args.ncols == 1 || ic0 + j < args.nTokensQ)) {
-+                    sum += float(maskh[(long)j * args.ne31 + i_KQ]);
++                    sum += float(maskh[(long)j * args.ne31 + cell_rel]);
 +                }
 +
 +                if (!in_range) sum = -FLT_MAX/2.0f;
@@ -5025,7 +5025,7 @@ index 398c80717..b517ffb0b 100644
 +        for (int k0 = 0; k0 < 32; k0 += V_cols_per_iter) {
 +            const int k = (int)sgitg * 32 + k0 + (int)tiisg / nthreads_V;
 +            const int cell_rel = k_VKQ_0 + k;
-+            const int phys_cell = args.hasLocs ? locs[cell_rel] : cell_rel;
++            const int phys_cell = (args.hasLocs && cell_rel < args.nCells) ? locs[cell_rel] : cell_rel;
 +
 +            float KQ_k[2];
 +            for (int j = 0; j < args.ncols; j++) {
@@ -5284,7 +5284,7 @@ index 398c80717..b517ffb0b 100644
 +            const int kq_grp_start = ((int)tiisg & ~(nthreads_KQ - 1));
 +            const int i_KQ = (int)sgitg * 32 + kq_grp_start + i_KQ_0;
 +            const int cell_rel = k_VKQ_0 + i_KQ;
-+            const int phys_cell = args.hasLocs ? locs[cell_rel] : cell_rel;
++            const int phys_cell = (args.hasLocs && cell_rel < args.nCells) ? locs[cell_rel] : cell_rel;
 +            const bool in_range = (cell_rel < args.nCells);
 +
 +            device const uint8_t * packed_row = K_p + (long)phys_cell * args.nKVHeads * args.packedBytes;
@@ -5428,7 +5428,7 @@ index 398c80717..b517ffb0b 100644
 +                    sum = args.logit_softcap * tanh(sum);
 +                }
 +                if (maskh && (args.ncols == 1 || ic0 + j < args.nTokensQ)) {
-+                    sum += float(maskh[(long)j * args.ne31 + i_KQ]);
++                    sum += float(maskh[(long)j * args.ne31 + cell_rel]);
 +                }
 +                if (!in_range) sum = -FLT_MAX/2.0f;
 +
@@ -5461,7 +5461,7 @@ index 398c80717..b517ffb0b 100644
 +        for (int k0 = 0; k0 < 32; k0 += V_cols_per_iter) {
 +            const int k = (int)sgitg * 32 + k0 + (int)tiisg / nthreads_V;
 +            const int cell_rel = k_VKQ_0 + k;
-+            const int phys_cell = args.hasLocs ? locs[cell_rel] : cell_rel;
++            const int phys_cell = (args.hasLocs && cell_rel < args.nCells) ? locs[cell_rel] : cell_rel;
 +            const bool in_range_v = (cell_rel < args.nCells);
 +
 +            float KQ_k[2];
@@ -5723,7 +5723,7 @@ index 398c80717..b517ffb0b 100644
 +            const int kq_grp_start = ((int)tiisg & ~(nthreads_KQ - 1));
 +            const int i_KQ = (int)sgitg * 32 + kq_grp_start + i_KQ_0;
 +            const int cell_rel = k_VKQ_0 + i_KQ;
-+            const int phys_cell = args.hasLocs ? locs[cell_rel] : cell_rel;
++            const int phys_cell = (args.hasLocs && cell_rel < args.nCells) ? locs[cell_rel] : cell_rel;
 +            const bool in_range = (cell_rel < args.nCells);
 +
 +            // Outlier index array for this cell (null when out-of-range).
@@ -5880,7 +5880,7 @@ index 398c80717..b517ffb0b 100644
 +                }
 +
 +                if (maskh && (args.ncols == 1 || ic0 + j < args.nTokensQ)) {
-+                    sum += float(maskh[(long)j * args.ne31 + i_KQ]);
++                    sum += float(maskh[(long)j * args.ne31 + cell_rel]);
 +                }
 +
 +                if (!in_range) sum = -FLT_MAX/2.0f;
@@ -5913,7 +5913,7 @@ index 398c80717..b517ffb0b 100644
 +        for (int k0 = 0; k0 < 32; k0 += V_cols_per_iter) {
 +            const int k = (int)sgitg * 32 + k0 + (int)tiisg / nthreads_V;
 +            const int cell_rel = k_VKQ_0 + k;
-+            const int phys_cell = args.hasLocs ? locs[cell_rel] : cell_rel;
++            const int phys_cell = (args.hasLocs && cell_rel < args.nCells) ? locs[cell_rel] : cell_rel;
 +
 +            float KQ_k[2];
 +            for (int j = 0; j < args.ncols; j++) {
@@ -6150,7 +6150,7 @@ index 398c80717..b517ffb0b 100644
 +            const int kq_grp_start = ((int)tiisg & ~(nthreads_KQ - 1));
 +            const int i_KQ = (int)sgitg * 32 + kq_grp_start + i_KQ_0;
 +            const int cell_rel = k_VKQ_0 + i_KQ;
-+            const int phys_cell = args.hasLocs ? locs[cell_rel] : cell_rel;
++            const int phys_cell = (args.hasLocs && cell_rel < args.nCells) ? locs[cell_rel] : cell_rel;
 +            const bool in_range = (cell_rel < args.nCells);
 +
 +            device const int16_t * o_idx_cell = in_range
@@ -6287,7 +6287,7 @@ index 398c80717..b517ffb0b 100644
 +                }
 +
 +                if (maskh && (args.ncols == 1 || ic0 + j < args.nTokensQ)) {
-+                    sum += float(maskh[(long)j * args.ne31 + i_KQ]);
++                    sum += float(maskh[(long)j * args.ne31 + cell_rel]);
 +                }
 +
 +                if (!in_range) sum = -FLT_MAX/2.0f;
@@ -6321,7 +6321,7 @@ index 398c80717..b517ffb0b 100644
 +        for (int k0 = 0; k0 < 32; k0 += V_cols_per_iter) {
 +            const int k = (int)sgitg * 32 + k0 + (int)tiisg / nthreads_V;
 +            const int cell_rel = k_VKQ_0 + k;
-+            const int phys_cell = args.hasLocs ? locs[cell_rel] : cell_rel;
++            const int phys_cell = (args.hasLocs && cell_rel < args.nCells) ? locs[cell_rel] : cell_rel;
 +
 +            float KQ_k[2];
 +            for (int j = 0; j < args.ncols; j++) {
@@ -6554,7 +6554,7 @@ index 398c80717..b517ffb0b 100644
 +            const int kq_grp_start = ((int)tiisg & ~(nthreads_KQ - 1));
 +            const int i_KQ = (int)sgitg * 32 + kq_grp_start + i_KQ_0;
 +            const int cell_rel = k_VKQ_0 + i_KQ;
-+            const int phys_cell = args.hasLocs ? locs[cell_rel] : cell_rel;
++            const int phys_cell = (args.hasLocs && cell_rel < args.nCells) ? locs[cell_rel] : cell_rel;
 +            const bool in_range = (cell_rel < args.nCells);
 +
 +            device const int16_t * o_idx_cell = in_range
@@ -6691,7 +6691,7 @@ index 398c80717..b517ffb0b 100644
 +                }
 +
 +                if (maskh && (args.ncols == 1 || ic0 + j < args.nTokensQ)) {
-+                    sum += float(maskh[(long)j * args.ne31 + i_KQ]);
++                    sum += float(maskh[(long)j * args.ne31 + cell_rel]);
 +                }
 +
 +                if (!in_range) sum = -FLT_MAX/2.0f;
@@ -6725,7 +6725,7 @@ index 398c80717..b517ffb0b 100644
 +        for (int k0 = 0; k0 < 32; k0 += V_cols_per_iter) {
 +            const int k = (int)sgitg * 32 + k0 + (int)tiisg / nthreads_V;
 +            const int cell_rel = k_VKQ_0 + k;
-+            const int phys_cell = args.hasLocs ? locs[cell_rel] : cell_rel;
++            const int phys_cell = (args.hasLocs && cell_rel < args.nCells) ? locs[cell_rel] : cell_rel;
 +
 +            float KQ_k[2];
 +            for (int j = 0; j < args.ncols; j++) {
@@ -6976,7 +6976,7 @@ index 398c80717..b517ffb0b 100644
 +            const int kq_grp_start = ((int)tiisg & ~(nthreads_KQ - 1));
 +            const int i_KQ = (int)sgitg * 32 + kq_grp_start + i_KQ_0;
 +            const int cell_rel = k_VKQ_0 + i_KQ;
-+            const int phys_cell = args.hasLocs ? locs[cell_rel] : cell_rel;
++            const int phys_cell = (args.hasLocs && cell_rel < args.nCells) ? locs[cell_rel] : cell_rel;
 +            const bool in_range = (cell_rel < args.nCells);
 +
 +            device const int16_t * o_idx_cell = in_range
@@ -7113,7 +7113,7 @@ index 398c80717..b517ffb0b 100644
 +                }
 +
 +                if (maskh && (args.ncols == 1 || ic0 + j < args.nTokensQ)) {
-+                    sum += float(maskh[(long)j * args.ne31 + i_KQ]);
++                    sum += float(maskh[(long)j * args.ne31 + cell_rel]);
 +                }
 +
 +                if (!in_range) sum = -FLT_MAX/2.0f;
@@ -7147,7 +7147,7 @@ index 398c80717..b517ffb0b 100644
 +        for (int k0 = 0; k0 < 32; k0 += V_cols_per_iter) {
 +            const int k = (int)sgitg * 32 + k0 + (int)tiisg / nthreads_V;
 +            const int cell_rel = k_VKQ_0 + k;
-+            const int phys_cell = args.hasLocs ? locs[cell_rel] : cell_rel;
++            const int phys_cell = (args.hasLocs && cell_rel < args.nCells) ? locs[cell_rel] : cell_rel;
 +
 +            float KQ_k[2];
 +            for (int j = 0; j < args.ncols; j++) {
@@ -7400,7 +7400,7 @@ index 398c80717..b517ffb0b 100644
 +            const int kq_grp_start = ((int)tiisg & ~(nthreads_KQ - 1));
 +            const int i_KQ = (int)sgitg * 32 + kq_grp_start + i_KQ_0;
 +            const int cell_rel = k_VKQ_0 + i_KQ;
-+            const int phys_cell = args.hasLocs ? locs[cell_rel] : cell_rel;
++            const int phys_cell = (args.hasLocs && cell_rel < args.nCells) ? locs[cell_rel] : cell_rel;
 +            const bool in_range = (cell_rel < args.nCells);
 +
 +            device const int16_t * o_idx_cell = in_range
@@ -7535,7 +7535,7 @@ index 398c80717..b517ffb0b 100644
 +                }
 +
 +                if (maskh && (args.ncols == 1 || ic0 + j < args.nTokensQ)) {
-+                    sum += float(maskh[(long)j * args.ne31 + i_KQ]);
++                    sum += float(maskh[(long)j * args.ne31 + cell_rel]);
 +                }
 +
 +                if (!in_range) sum = -FLT_MAX/2.0f;
@@ -7568,7 +7568,7 @@ index 398c80717..b517ffb0b 100644
 +        for (int k0 = 0; k0 < 32; k0 += V_cols_per_iter) {
 +            const int k = (int)sgitg * 32 + k0 + (int)tiisg / nthreads_V;
 +            const int cell_rel = k_VKQ_0 + k;
-+            const int phys_cell = args.hasLocs ? locs[cell_rel] : cell_rel;
++            const int phys_cell = (args.hasLocs && cell_rel < args.nCells) ? locs[cell_rel] : cell_rel;
 +            const bool in_range_v = (cell_rel < args.nCells);
 +
 +            float KQ_k[2];
@@ -7815,7 +7815,7 @@ index 398c80717..b517ffb0b 100644
 +            const int kq_grp_start = ((int)tiisg & ~(nthreads_KQ - 1));
 +            const int i_KQ = (int)sgitg * 32 + kq_grp_start + i_KQ_0;
 +            const int cell_rel = k_VKQ_0 + i_KQ;
-+            const int phys_cell = args.hasLocs ? locs[cell_rel] : cell_rel;
++            const int phys_cell = (args.hasLocs && cell_rel < args.nCells) ? locs[cell_rel] : cell_rel;
 +            const bool in_range = (cell_rel < args.nCells);
 +
 +            device const int16_t * o_idx_cell = in_range
@@ -7952,7 +7952,7 @@ index 398c80717..b517ffb0b 100644
 +                }
 +
 +                if (maskh && (args.ncols == 1 || ic0 + j < args.nTokensQ)) {
-+                    sum += float(maskh[(long)j * args.ne31 + i_KQ]);
++                    sum += float(maskh[(long)j * args.ne31 + cell_rel]);
 +                }
 +
 +                if (!in_range) sum = -FLT_MAX/2.0f;
@@ -7986,7 +7986,7 @@ index 398c80717..b517ffb0b 100644
 +        for (int k0 = 0; k0 < 32; k0 += V_cols_per_iter) {
 +            const int k = (int)sgitg * 32 + k0 + (int)tiisg / nthreads_V;
 +            const int cell_rel = k_VKQ_0 + k;
-+            const int phys_cell = args.hasLocs ? locs[cell_rel] : cell_rel;
++            const int phys_cell = (args.hasLocs && cell_rel < args.nCells) ? locs[cell_rel] : cell_rel;
 +            const bool in_range_v = (cell_rel < args.nCells);
 +
 +            float KQ_k[2];
@@ -8228,7 +8228,7 @@ index 398c80717..b517ffb0b 100644
 +            const int kq_grp_start = ((int)tiisg & ~(nthreads_KQ - 1));
 +            const int i_KQ = (int)sgitg * 32 + kq_grp_start + i_KQ_0;
 +            const int cell_rel = k_VKQ_0 + i_KQ;
-+            const int phys_cell = args.hasLocs ? locs[cell_rel] : cell_rel;
++            const int phys_cell = (args.hasLocs && cell_rel < args.nCells) ? locs[cell_rel] : cell_rel;
 +            const bool in_range = (cell_rel < args.nCells);
 +
 +            device const int16_t * o_idx_cell = in_range
@@ -8365,7 +8365,7 @@ index 398c80717..b517ffb0b 100644
 +                }
 +
 +                if (maskh && (args.ncols == 1 || ic0 + j < args.nTokensQ)) {
-+                    sum += float(maskh[(long)j * args.ne31 + i_KQ]);
++                    sum += float(maskh[(long)j * args.ne31 + cell_rel]);
 +                }
 +
 +                if (!in_range) sum = -FLT_MAX/2.0f;
@@ -8399,7 +8399,7 @@ index 398c80717..b517ffb0b 100644
 +        for (int k0 = 0; k0 < 32; k0 += V_cols_per_iter) {
 +            const int k = (int)sgitg * 32 + k0 + (int)tiisg / nthreads_V;
 +            const int cell_rel = k_VKQ_0 + k;
-+            const int phys_cell = args.hasLocs ? locs[cell_rel] : cell_rel;
++            const int phys_cell = (args.hasLocs && cell_rel < args.nCells) ? locs[cell_rel] : cell_rel;
 +            const bool in_range_v = (cell_rel < args.nCells);
 +
 +            float KQ_k[2];
@@ -8659,7 +8659,7 @@ index 398c80717..b517ffb0b 100644
 +            const int kq_grp_start = ((int)tiisg & ~(nthreads_KQ - 1));
 +            const int i_KQ = (int)sgitg * 32 + kq_grp_start + i_KQ_0;
 +            const int cell_rel = k_VKQ_0 + i_KQ;
-+            const int phys_cell = args.hasLocs ? locs[cell_rel] : cell_rel;
++            const int phys_cell = (args.hasLocs && cell_rel < args.nCells) ? locs[cell_rel] : cell_rel;
 +            const bool in_range = (cell_rel < args.nCells);
 +
 +            device const int16_t * o_idx_cell = in_range
@@ -8796,7 +8796,7 @@ index 398c80717..b517ffb0b 100644
 +                }
 +
 +                if (maskh && (args.ncols == 1 || ic0 + j < args.nTokensQ)) {
-+                    sum += float(maskh[(long)j * args.ne31 + i_KQ]);
++                    sum += float(maskh[(long)j * args.ne31 + cell_rel]);
 +                }
 +
 +                if (!in_range) sum = -FLT_MAX/2.0f;
@@ -8830,7 +8830,7 @@ index 398c80717..b517ffb0b 100644
 +        for (int k0 = 0; k0 < 32; k0 += V_cols_per_iter) {
 +            const int k = (int)sgitg * 32 + k0 + (int)tiisg / nthreads_V;
 +            const int cell_rel = k_VKQ_0 + k;
-+            const int phys_cell = args.hasLocs ? locs[cell_rel] : cell_rel;
++            const int phys_cell = (args.hasLocs && cell_rel < args.nCells) ? locs[cell_rel] : cell_rel;
 +            const bool in_range_v = (cell_rel < args.nCells);
 +
 +            float KQ_k[2];
