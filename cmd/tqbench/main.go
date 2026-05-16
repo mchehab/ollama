@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -524,140 +525,146 @@ func writeSummaryMarkdown(w io.Writer, results []cellResult, kvModes []string, c
 		fmt.Fprintf(w, "Commit: `%s`\n\n", commit)
 	}
 
-	// Aggregate across epochs
-	agg := make(map[avgKey]*avgVal)
-	keyOrder := []avgKey{}
+	// Deterministic KV mode ordering (fallback to alphabetical for unknowns)
+	kvRank := map[string]int{"f16": 0, "tq4": 1, "tq4k": 2, "tq3": 3, "tq3k": 4, "tq2": 5, "tq2k": 6, "q8_0": 7, "q4_0": 8, "f32": 9}
+	sortKey := func(mode string) int {
+		if r, ok := kvRank[mode]; ok { return r }
+		return len(kvRank)
+	}
+
+	type agg struct {
+		pref, dec, vram, ppl float64
+		pplCnt			   int
+		fit				  string
+		cnt				  int
+	}
+
+	// data[model][ctx][kvMode] = *agg
+	data := make(map[string]map[int]map[string]*agg)
+	var models []string
+	var ctxs []int
+	seenM, seenC := make(map[string]bool), make(map[int]bool)
+	var anomalies []string
 
 	for _, r := range results {
 		if r.FitStatus == "oom" || r.FitStatus == "error" {
+			anomalies = append(anomalies, fmt.Sprintf("[%s] Ctx %d %s: %s", r.Model, r.ContextSize, r.KVMode, r.Error))
 			continue
 		}
-		k := avgKey{Model: r.Model, Ctx: r.ContextSize, KVMode: r.KVMode}
-		v := agg[k]
+		if !seenM[r.Model] { seenM[r.Model] = true; models = append(models, r.Model) }
+		if !seenC[r.ContextSize] { seenC[r.ContextSize] = true; ctxs = append(ctxs, r.ContextSize) }
+
+		if data[r.Model] == nil { data[r.Model] = make(map[int]map[string]*agg) }
+		if data[r.Model][r.ContextSize] == nil { data[r.Model][r.ContextSize] = make(map[string]*agg) }
+
+		v := data[r.Model][r.ContextSize][r.KVMode]
 		if v == nil {
-			v = &avgVal{}
-			agg[k] = v
-			keyOrder = append(keyOrder, k)
+			v = &agg{}
+			data[r.Model][r.ContextSize][r.KVMode] = v
 		}
-		v.PrefillSum += r.PrefillTokSec
-		v.DecodeSum += r.DecodeTokSec
+		v.pref += r.PrefillTokSec
+		v.dec += r.DecodeTokSec
+		v.vram += r.SizeVRAMMB
 		if r.PPL > 0 {
-			v.PPLSum += r.PPL
-			v.PPLCount++
+			v.ppl += r.PPL
+			v.pplCnt++
+			anomalies = append(anomalies, fmt.Sprintf("[%s] Ctx %d %s: PPL=%.4f (expected -)", r.Model, r.ContextSize, r.KVMode))
 		}
-		v.KVCacheMB = r.KVCacheMB // same per cell
-		v.SizeVRAMMB = r.SizeVRAMMB
-		v.SizeTotalMB = r.SizeTotalMB
-		v.EstGPULayers = r.EstGPULayers
-		v.FitStatus = r.FitStatus
-		v.Count++
+		v.fit = r.FitStatus
+		if r.FitStatus != "ok" {
+			anomalies = append(anomalies, fmt.Sprintf("[%s] Ctx %d %s: Status=%s (expected ok)", r.Model, r.ContextSize, r.KVMode, r.FitStatus))
+		}
+		v.cnt++
+	}
+	sort.Ints(ctxs)
+
+	// Unique KV modes present in valid results
+	kvSet := make(map[string]bool)
+	for _, r := range results {
+		if r.FitStatus != "oom" && r.FitStatus != "error" {
+			kvSet[r.KVMode] = true
+		}
+	}
+	var modes []string
+	for k := range kvSet { modes = append(modes, k) }
+	sort.Slice(modes, func(i, j int) bool {
+		ri, rj := sortKey(modes[i]), sortKey(modes[j])
+		return ri < rj || (ri == rj && modes[i] < modes[j])
+	})
+
+	baseline := "f16"
+	if !kvSet[baseline] && len(modes) > 0 {
+		baseline = modes[0]
 	}
 
-	// Two-mode A/B comparison table
-	if len(kvModes) == 2 {
-		m1, m2 := kvModes[0], kvModes[1]
-		fmt.Fprintf(w, "## A/B Comparison: %s vs %s\n\n", m1, m2)
-		fmt.Fprintf(w, "| Model | Ctx | Metric | %s | %s | Delta |\n", m1, m2)
-		fmt.Fprintf(w, "|-------|-----|--------|------|------|-------|\n")
+	// Generic table generator
+	genTable := func(title string, val func(*agg) float64) {
+		fmt.Fprintf(w, "# %s\n\n", title)
+		hdr := []string{"Model", "Ctx"}
+		for _, m := range modes { hdr = append(hdr, m) }
+		fmt.Fprintf(w, "| %s |\n", strings.Join(hdr, " | "))
+		fmt.Fprintf(w, "| %s \n", strings.Repeat("-----|", len(hdr)))
 
-		// Collect unique (model, ctx) pairs in order
-		type mcKey struct{ Model string; Ctx int }
-		mcSeen := make(map[mcKey]bool)
-		var mcOrder []mcKey
-		for _, k := range keyOrder {
-			mc := mcKey{k.Model, k.Ctx}
-			if !mcSeen[mc] {
-				mcSeen[mc] = true
-				mcOrder = append(mcOrder, mc)
-			}
-		}
-
-		for _, mc := range mcOrder {
-			k1 := avgKey{mc.Model, mc.Ctx, m1}
-			k2 := avgKey{mc.Model, mc.Ctx, m2}
-			v1 := agg[k1]
-			v2 := agg[k2]
-
-			printRow := func(metric string, val1, val2 float64, fmtStr string) {
-				s1, s2, delta := "-", "-", "-"
-				if v1 != nil && v1.Count > 0 {
-					s1 = fmt.Sprintf(fmtStr, val1)
+		for _, mdl := range models {
+			for _, ctx := range ctxs {
+				row := []string{mdl, strconv.Itoa(ctx)}
+				var baseVal float64
+				var hasBase bool
+				if bd, ok := data[mdl][ctx][baseline]; ok && bd.cnt > 0 {
+					baseVal = val(bd) / float64(bd.cnt)
+					hasBase = true
 				}
-				if v2 != nil && v2.Count > 0 {
-					s2 = fmt.Sprintf(fmtStr, val2)
-				}
-				if v1 != nil && v2 != nil && v1.Count > 0 && v2.Count > 0 && val1 != 0 {
-					pct := (val2 - val1) / math.Abs(val1) * 100
-					sign := "+"
-					if pct < 0 {
-						sign = ""
+
+				for _, m := range modes {
+					v := data[mdl][ctx][m]
+					if v == nil || v.cnt == 0 {
+						row = append(row, "-")
+						continue
 					}
-					delta = fmt.Sprintf("%s%.1f%%", sign, pct)
-				}
-				fmt.Fprintf(w, "| %s | %d | %s | %s | %s | %s |\n",
-					mc.Model, mc.Ctx, metric, s1, s2, delta)
-			}
+					avg := val(v) / float64(v.cnt)
+					suffix := " tok/s"
 
-			var prefill1, prefill2, decode1, decode2 float64
-			var ppl1, ppl2 float64
-			var kvcache1, kvcache2, vram1, vram2 float64
-			var gpu1, gpu2 float64
-			if v1 != nil && v1.Count > 0 {
-				prefill1 = v1.PrefillSum / float64(v1.Count)
-				decode1 = v1.DecodeSum / float64(v1.Count)
-				kvcache1 = v1.KVCacheMB
-				vram1 = v1.SizeVRAMMB
-				gpu1 = float64(v1.EstGPULayers)
-				if v1.PPLCount > 0 {
-					ppl1 = v1.PPLSum / float64(v1.PPLCount)
-				}
-			}
-			if v2 != nil && v2.Count > 0 {
-				prefill2 = v2.PrefillSum / float64(v2.Count)
-				decode2 = v2.DecodeSum / float64(v2.Count)
-				kvcache2 = v2.KVCacheMB
-				vram2 = v2.SizeVRAMMB
-				gpu2 = float64(v2.EstGPULayers)
-				if v2.PPLCount > 0 {
-					ppl2 = v2.PPLSum / float64(v2.PPLCount)
-				}
-			}
+					if title == "VRAM" {
+						suffix = " MB"
+					}
 
-			printRow("Prefill tok/s", prefill1, prefill2, "%.1f")
-			printRow("Decode tok/s", decode1, decode2, "%.1f")
-			if ppl1 > 0 || ppl2 > 0 {
-				printRow("PPL (decode)", ppl1, ppl2, "%.4f")
+					if m == baseline || !hasBase || baseVal == 0 {
+						row = append(row, fmt.Sprintf("%.1f%s", avg, suffix))
+					} else {
+						percent := ((avg - baseVal) * 100 / baseVal)
+						if title == "VRAM" {
+							if percent < avg {
+								percent = -percent
+							}
+						} else {
+							if percent > avg {
+								percent = -percent
+							}
+						}
+						row = append(row, fmt.Sprintf("%+.1f%% (%.0f%s)", percent, avg, suffix))
+					}
+				}
+				fmt.Fprintf(w, "| %s |\n", strings.Join(row, " | "))
 			}
-			printRow("KV Cache (MB)", kvcache1, kvcache2, "%.0f")
-			printRow("Total VRAM (MB)", vram1, vram2, "%.0f")
-			printRow("GPU Layers", gpu1, gpu2, "%.0f")
 		}
 		fmt.Fprintln(w)
 	}
 
-	// Flat all-results table
-	fmt.Fprintf(w, "## All Results (Averaged)\n\n")
-	fmt.Fprintf(w, "| Model | Ctx | KV Mode | Prefill tok/s | Decode tok/s | PPL | KV MB | VRAM MB | GPU Layers | Status |\n")
-	fmt.Fprintf(w, "|-------|-----|---------|--------------|-------------|-----|-------|---------|------------|--------|\n")
+	genTable("VRAM", func(a *agg) float64 { return a.vram })
+	genTable("Prefill tok/s", func(a *agg) float64 { return a.pref })
+	genTable("Decode tok/s", func(a *agg) float64 { return a.dec })
 
-	for _, k := range keyOrder {
-		v := agg[k]
-		if v == nil || v.Count == 0 {
-			continue
+	if len(anomalies) > 0 {
+		fmt.Fprintln(w, "## Notes on Non-Standard Results\n")
+		seen := make(map[string]bool)
+		for _, a := range anomalies {
+			if !seen[a] {
+				seen[a] = true
+				fmt.Fprintf(w, "- %s\n", a)
+			}
 		}
-		avgPrefill := v.PrefillSum / float64(v.Count)
-		avgDecode := v.DecodeSum / float64(v.Count)
-		pplStr := "-"
-		if v.PPLCount > 0 {
-			pplStr = fmt.Sprintf("%.4f", v.PPLSum/float64(v.PPLCount))
-		}
-		fmt.Fprintf(w, "| %s | %d | %s | %.1f | %.1f | %s | %.0f | %.0f | %d | %s |\n",
-			k.Model, k.Ctx, k.KVMode,
-			avgPrefill, avgDecode, pplStr,
-			v.KVCacheMB, v.SizeVRAMMB, v.EstGPULayers, v.FitStatus,
-		)
+		fmt.Fprintln(w)
 	}
-	fmt.Fprintln(w)
 }
 
 // tokSec converts token count and duration to tokens/second. Avoids div-by-zero.
