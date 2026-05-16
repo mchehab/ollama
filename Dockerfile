@@ -192,7 +192,8 @@ ARG CGO_CXXFLAGS
 ENV CGO_CFLAGS="${CGO_CFLAGS}"
 ENV CGO_CXXFLAGS="${CGO_CXXFLAGS}"
 RUN --mount=type=cache,target=/root/.cache/go-build \
-    go build -trimpath -buildmode=pie -o /bin/ollama .
+    go build -trimpath -buildmode=pie -o /bin/ollama . && \
+    go build -trimpath -buildmode=pie -o /bin/ollama-tqbench ./cmd/tqbench
 
 FROM --platform=linux/amd64 scratch AS amd64
 # COPY --from=cuda-11 dist/lib/ollama/ /lib/ollama/
@@ -214,6 +215,7 @@ COPY --from=rocm-7 dist/lib/ollama /lib/ollama
 FROM ${FLAVOR} AS archive
 COPY --from=cpu dist/lib/ollama /lib/ollama
 COPY --from=build /bin/ollama /bin/ollama
+COPY --from=build /bin/ollama-tqbench /bin/ollama-tqbench
 
 FROM ubuntu:24.04
 ARG APT_MIRROR=http://archive.ubuntu.com/ubuntu
@@ -231,5 +233,6 @@ ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
 ENV NVIDIA_VISIBLE_DEVICES=all
 ENV OLLAMA_HOST=0.0.0.0:11434
 EXPOSE 11434
-ENTRYPOINT ["/bin/ollama"]
-CMD ["serve"]
+#ENTRYPOINT ["/bin/ollama"]
+#CMD ["serve"]
+ENTRYPOINT ["/bin/ollama-tqbench"]
