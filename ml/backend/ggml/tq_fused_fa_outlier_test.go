@@ -435,7 +435,7 @@ func TestTQFusedFlashAttentionOutlierAsymmetric(t *testing.T) {
 	}
 	vF16Bytes := tqF32SliceToF16Bytes(vF32)
 
-	// ── GPU graph ────────────────────────────────────────────────────────────
+	// ── GPU graph (single Compute) ───────────────────────────────────────────
 
 	kTensor := ctx.FromFloats(kData, headDim, nKVHeads, nCells)
 	qTensor := ctx.FromFloats(qRotated, headDim, 1, nKVHeads)
@@ -445,15 +445,6 @@ func TestTQFusedFlashAttentionOutlierAsymmetric(t *testing.T) {
 	if enc == nil {
 		t.Fatalf("EncodeK returned nil")
 	}
-
-	// DequantK → Cast(f32) gives the ground-truth K used for the CPU reference.
-	// Floats() on an f16 tensor returns raw f16 bytes packed into float32 slots,
-	// which is unusable; casting to f32 first gives correct float32 values.
-	dequantKF16 := mgr.DequantK(ctx, 0, enc, 0, nCells)
-	if dequantKF16 == nil {
-		t.Fatalf("DequantK returned nil")
-	}
-	dequantKF32 := dequantKF16.(*Tensor).Cast(ctx, ml.DTypeF32)
 
 	tqkRaw, ok := mgr.GetAsTQTensor(ctx, 0, enc, 0, nCells)
 	if !ok || tqkRaw == nil {
@@ -477,44 +468,52 @@ func TestTQFusedFlashAttentionOutlierAsymmetric(t *testing.T) {
 		t.Fatalf("tqFlashAttention returned nil")
 	}
 
-	// Single Compute(): enc computed once; dequantKF32 and attnOut are
-	// independent consumers of enc's output in the same DAG.
-	ctx.Forward(enc, dequantKF32, attnOut).Compute(enc, dequantKF32, attnOut)
-
-	// ── Read back results ────────────────────────────────────────────────────
-
-	// dequantKF32: [headDim, nKVHeads, nCells] f32
-	// flat index k[d, h, c] = d + h*headDim + c*headDim*nKVHeads
-	kRef := dequantKF32.Floats()
-	if len(kRef) != headDim*nKVHeads*nCells {
-		t.Fatalf("dequantKF32 output len = %d, want %d", len(kRef), headDim*nKVHeads*nCells)
-	}
+	ctx.Forward(enc, attnOut).Compute(enc, attnOut)
 
 	gpuOut := attnOut.Floats()
 	if len(gpuOut) != headDim*nKVHeads {
 		t.Fatalf("attnOut len = %d, want %d", len(gpuOut), headDim*nKVHeads)
 	}
 
-	// ── Smoke check ──────────────────────────────────────────────────────────
+	// ── Smoke: no NaN / Inf ─────────────────────────────────────────────────
 	for i, v := range gpuOut {
 		if math.IsNaN(float64(v)) || math.IsInf(float64(v), 0) {
 			t.Fatalf("gpuOut[%d] = %v (NaN/Inf) — asymmetric outlier kernel reading uninitialised memory", i, v)
 		}
 	}
-	for i, v := range kRef {
-		if math.IsNaN(float64(v)) || math.IsInf(float64(v), 0) {
-			t.Fatalf("kRef[%d] = %v (NaN/Inf) — DequantK or Cast broken", i, v)
+
+	// ── CPU softmax(scale·Q·K^T)·V using independent CPU encode+decode ──────
+	//
+	// Build kRef via the asymmetric-aware CPU reference encoder rather than
+	// re-using a GPU dequant in the same compute graph — kRef and attnOut
+	// would otherwise alias under ggml's scheduler. See feedback memory
+	// `feedback_ggml_test_kref_aliasing`.
+	cpuPreset := turboquant.Preset{
+		ID: 201, Name: "test_outlier_asym",
+		RotationSeed:      layerSeed,
+		KeyPrimaryBits:    bits,
+		OutlierBits:       outlierBits,
+		OutlierCount:      outlierCount,
+		AsymmetricPrimary: true,
+	}
+	kDecoded := make([][]float32, nCells*nKVHeads)
+	for c := range nCells {
+		for h := range nKVHeads {
+			slab := kData[(c*nKVHeads+h)*headDim : (c*nKVHeads+h+1)*headDim]
+			cpuEnc, err := turboquant.EncodeKeyPerHeadOutlier(slab, cpuPreset)
+			if err != nil {
+				t.Fatalf("CPU encode c=%d h=%d: %v", c, h, err)
+			}
+			kDecoded[c*nKVHeads+h] = turboquant.DequantKeyPerHeadOutlier(cpuEnc, cpuPreset, headDim)
 		}
 	}
 
-	// ── CPU softmax(scale·Q·K^T)·V using GPU-decoded K as reference ──────────
-	//
-	// Tolerance is 0.20. The asymmetric path adds two extra MAC operations
-	// (regMean × sum_q_reg + outMean × sum_q_outl) on f16-quantized means,
-	// pushing the precision floor above the ~0.05 of the symmetric path.
-	// Empirical: all heads clean at 0.20 when the kernel is correct.
-	// If the zero correction is MISSING, the score shift Q·zeros/√D ≈ 2–5
-	// produces output errors 10–50× this threshold.
+	// Tolerance 0.20: asymmetric centring + EDEN refinement on CPU narrows
+	// the gap to the GPU kernel, but f16-quantized means and shfl-reduction
+	// reorder still account for noticeable noise above the symmetric path's
+	// ~0.05 floor. If the zero correction is MISSING in the kernel, the
+	// score shift Q·zeros/√D ≈ 2–5 produces output errors 10–50× this
+	// threshold — that's the failure mode this test is here to catch.
 	const tol float32 = 0.20
 	var maxDiff float32
 	var nMismatches int
@@ -524,10 +523,10 @@ func TestTQFusedFlashAttentionOutlierAsymmetric(t *testing.T) {
 
 		scores := make([]float64, nCells)
 		for c := range nCells {
-			kBase := h*headDim + c*headDim*nKVHeads
+			kH := kDecoded[c*nKVHeads+h]
 			var dot float64
 			for d := range headDim {
-				dot += float64(qH[d]) * float64(kRef[kBase+d])
+				dot += float64(qH[d]) * float64(kH[d])
 			}
 			scores[c] = dot * attnScale
 		}

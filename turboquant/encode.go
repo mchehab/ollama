@@ -230,8 +230,10 @@ func DequantKeyPerHead(packedIndices []byte, scale float32, headDim, bits int) [
 type OutlierPerHead struct {
 	RegularPacked  []byte
 	RegularScale   float32
+	RegularZero    float32 // per-sub-block mean (asymmetric primary); 0 in symmetric mode
 	OutlierPacked  []byte
 	OutlierScale   float32
+	OutlierZero    float32 // per-sub-block mean (asymmetric primary); 0 in symmetric mode
 	OutlierIndices []int
 }
 
@@ -300,8 +302,18 @@ func EncodeKeyPerHeadOutlier(values []float32, preset Preset) (OutlierPerHead, e
 		}
 	}
 
-	regularScale := blockScale(regularRotated)
-	outlierScale := blockScale(outlierVal)
+	// Per-sub-block stats: mean (asymmetric only) + scale.
+	// Mirrors tq-encode.cu Step 5: regular sub-block first, then outlier
+	// sub-block. Symmetric path uses RMS scale and zero mean.
+	var regularZero, outlierZero float32
+	var regularScale, outlierScale float32
+	if preset.HasAsymmetricPrimary() {
+		regularZero, regularScale = asymmetricBlockStats(regularRotated)
+		outlierZero, outlierScale = asymmetricBlockStats(outlierVal)
+	} else {
+		regularScale = blockScale(regularRotated)
+		outlierScale = blockScale(outlierVal)
+	}
 
 	regularCodebook, regularBoundaries := scalarCodebook(dim, bits)
 	outlierCodebook, outlierBoundaries := scalarCodebook(dim, outlierBits)
@@ -309,21 +321,30 @@ func EncodeKeyPerHeadOutlier(values []float32, preset Preset) (OutlierPerHead, e
 	regularCodes := make([]uint8, regularCount)
 	if regularScale > 0 {
 		for r, v := range regularRotated {
-			regularCodes[r] = quantizeScalarByBoundary(v/regularScale, regularCodebook, regularBoundaries)
+			regularCodes[r] = quantizeScalarByBoundary((v-regularZero)/regularScale, regularCodebook, regularBoundaries)
 		}
+		// Path B (adaptive RMS-vs-EDEN): try EDEN refinement, keep whichever
+		// of RMS-only or EDEN-refined has lower per-cell reconstruction MSE.
+		// Matches tq-encode.cu's Step 5b/8 — provably non-worse than RMS,
+		// and necessary for the GPU↔CPU comparison to converge on inputs
+		// where EDEN happens to overfit the codebook.
+		regularScale = pathBRefineScale(regularRotated, regularCodes, regularCodebook, regularBoundaries, regularScale, regularZero)
 	}
 	outlierCodes := make([]uint8, outlierCount)
 	if outlierScale > 0 {
 		for r, v := range outlierVal {
-			outlierCodes[r] = quantizeScalarByBoundary(v/outlierScale, outlierCodebook, outlierBoundaries)
+			outlierCodes[r] = quantizeScalarByBoundary((v-outlierZero)/outlierScale, outlierCodebook, outlierBoundaries)
 		}
+		outlierScale = pathBRefineScale(outlierVal, outlierCodes, outlierCodebook, outlierBoundaries, outlierScale, outlierZero)
 	}
 
 	return OutlierPerHead{
 		RegularPacked:  packBits(regularCodes, bits),
 		RegularScale:   regularScale,
+		RegularZero:    regularZero,
 		OutlierPacked:  packBits(outlierCodes, outlierBits),
 		OutlierScale:   outlierScale,
+		OutlierZero:    outlierZero,
 		OutlierIndices: outlierPos,
 	}, nil
 }
@@ -357,9 +378,9 @@ func DequantKeyPerHeadOutlier(enc OutlierPerHead, preset Preset, headDim int) []
 	regPos := 0
 	for i := range headDim {
 		if outlierSlotFor[i] >= 0 {
-			out[i] = dequantizeScalar(outlierIdx[outlierSlotFor[i]], outlierCodebook) * enc.OutlierScale
+			out[i] = dequantizeScalar(outlierIdx[outlierSlotFor[i]], outlierCodebook)*enc.OutlierScale + enc.OutlierZero
 		} else {
-			out[i] = dequantizeScalar(regularIdx[regPos], regularCodebook) * enc.RegularScale
+			out[i] = dequantizeScalar(regularIdx[regPos], regularCodebook)*enc.RegularScale + enc.RegularZero
 			regPos++
 		}
 	}
@@ -390,6 +411,51 @@ func edenRefineScale(rotated []float32, codes []uint8, codebook []float32, bound
 		}
 	}
 	return scale
+}
+
+// pathBRefineScale runs Path B (adaptive RMS-vs-EDEN). Mirrors tq-encode.cu's
+// Step 5b: compute both the RMS-only and EDEN-refined (scale, codes) pairs,
+// then keep whichever has lower per-cell reconstruction MSE. The codes slice
+// is mutated in place to reflect the chosen pair.
+//
+// rmsCodes is the result of the initial quantization at scaleRMS (callers pass
+// codes already populated by the RMS quantize step). zero is the per-block
+// mean for asymmetric mode, 0 for symmetric. Returns the chosen scale.
+//
+// Provably non-worse than RMS-only: if EDEN's refined codes have higher MSE
+// than the RMS pair, the function restores the RMS codes and scale.
+func pathBRefineScale(rotated []float32, codes []uint8, codebook []float32, boundaries []float32, scaleRMS, zero float32) float32 {
+	if len(codes) == 0 {
+		return scaleRMS
+	}
+	// Save RMS codes before EDEN overwrites them.
+	rmsCodes := append([]uint8(nil), codes...)
+
+	scaleEDEN := edenRefineScale(rotated, codes, codebook, boundaries, scaleRMS, zero)
+
+	// Per-cell MSE for EDEN-refined (codes + scaleEDEN).
+	var errEDEN float64
+	for i, code := range codes {
+		predicted := float64(codebook[code]) * float64(scaleEDEN)
+		actual := float64(rotated[i]) - float64(zero)
+		d := actual - predicted
+		errEDEN += d * d
+	}
+
+	// Per-cell MSE for RMS-only (rmsCodes + scaleRMS).
+	var errRMS float64
+	for i, code := range rmsCodes {
+		predicted := float64(codebook[code]) * float64(scaleRMS)
+		actual := float64(rotated[i]) - float64(zero)
+		d := actual - predicted
+		errRMS += d * d
+	}
+
+	if errRMS < errEDEN {
+		copy(codes, rmsCodes)
+		return scaleRMS
+	}
+	return scaleEDEN
 }
 
 func blockScale(values []float32) float32 {

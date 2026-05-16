@@ -297,12 +297,6 @@ func TestTQFusedFlashAttentionOutlier4bitAsymmetric(t *testing.T) {
 		t.Fatalf("EncodeK returned nil")
 	}
 
-	dequantKF16 := mgr.DequantK(ctx, 0, enc, 0, nCells)
-	if dequantKF16 == nil {
-		t.Fatalf("DequantK returned nil")
-	}
-	dequantKF32 := dequantKF16.(*Tensor).Cast(ctx, ml.DTypeF32)
-
 	tqkRaw, ok := mgr.GetAsTQTensor(ctx, 0, enc, 0, nCells)
 	if !ok || tqkRaw == nil {
 		t.Fatalf("GetAsTQTensor returned (nil, %v)", ok)
@@ -325,12 +319,8 @@ func TestTQFusedFlashAttentionOutlier4bitAsymmetric(t *testing.T) {
 		t.Fatalf("tqFlashAttention returned nil")
 	}
 
-	ctx.Forward(enc, dequantKF32, attnOut).Compute(enc, dequantKF32, attnOut)
+	ctx.Forward(enc, attnOut).Compute(enc, attnOut)
 
-	kRef := dequantKF32.Floats()
-	if len(kRef) != headDim*nKVHeads*nCells {
-		t.Fatalf("kRef len=%d want %d", len(kRef), headDim*nKVHeads*nCells)
-	}
 	gpuOut := attnOut.Floats()
 	if len(gpuOut) != headDim*nKVHeads {
 		t.Fatalf("attnOut len=%d want %d", len(gpuOut), headDim*nKVHeads)
@@ -341,9 +331,27 @@ func TestTQFusedFlashAttentionOutlier4bitAsymmetric(t *testing.T) {
 			t.Fatalf("gpuOut[%d]=%v (NaN/Inf)", i, v)
 		}
 	}
-	for i, v := range kRef {
-		if math.IsNaN(float64(v)) || math.IsInf(float64(v), 0) {
-			t.Fatalf("kRef[%d]=%v (NaN/Inf)", i, v)
+
+	// CPU asymmetric+EDEN reference: independent encode+decode, no GPU dequant
+	// in the same compute graph (avoids kRef aliasing). See feedback memory
+	// `feedback_ggml_test_kref_aliasing`.
+	cpuPreset := turboquant.Preset{
+		ID: 202, Name: "test_outlier_asym_4bit",
+		RotationSeed:      layerSeed,
+		KeyPrimaryBits:    bits,
+		OutlierBits:       outlierBits,
+		OutlierCount:      outlierCount,
+		AsymmetricPrimary: true,
+	}
+	kDecoded := make([][]float32, nCells*nKVHeads)
+	for c := range nCells {
+		for h := range nKVHeads {
+			slab := kData[(c*nKVHeads+h)*headDim : (c*nKVHeads+h+1)*headDim]
+			cpuEnc, err := turboquant.EncodeKeyPerHeadOutlier(slab, cpuPreset)
+			if err != nil {
+				t.Fatalf("CPU encode c=%d h=%d: %v", c, h, err)
+			}
+			kDecoded[c*nKVHeads+h] = turboquant.DequantKeyPerHeadOutlier(cpuEnc, cpuPreset, headDim)
 		}
 	}
 
@@ -358,10 +366,10 @@ func TestTQFusedFlashAttentionOutlier4bitAsymmetric(t *testing.T) {
 
 		scores := make([]float64, nCells)
 		for c := range nCells {
-			kBase := h*headDim + c*headDim*nKVHeads
+			kH := kDecoded[c*nKVHeads+h]
 			var dot float64
 			for d := range headDim {
-				dot += float64(qH[d]) * float64(kRef[kBase+d])
+				dot += float64(qH[d]) * float64(kH[d])
 			}
 			scores[c] = dot * attnScale
 		}
