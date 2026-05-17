@@ -14737,7 +14737,8 @@ kernel void kernel_tq_fattn_vec_f16(
             // array (private address space; no threadgroup memory increase),
             // then the j loop becomes a pure FMA. O(nCells × ncols) decode
             // work → O(nCells) for prefill (ncols=2).
-            device const uint8_t * packed_row = K_p + (long)phys_cell * args.nKVHeads * args.packedBytes;
+            const int safe_phys_cell = in_range ? phys_cell : 0;
+            device const uint8_t * packed_row = K_p + (long)safe_phys_cell * args.nKVHeads * args.packedBytes;
             const float rms_scale = in_range ? K_sc[phys_cell * args.nKVHeads] : 0.0f;
             const float zero_val = (args.asymmetric && K_zr && in_range)
                 ? K_zr[(long)phys_cell * args.nKVHeads] : 0.0f;
@@ -15056,7 +15057,8 @@ kernel void kernel_tq_fattn_vec_f16_d64(
             // Hoist K decode out of the j loop. See kernel_tq_fattn_vec_f16
             // for full rationale. Per-thread k_lane[] cache replaces redundant
             // per-Q-token K decode.
-            device const uint8_t * packed_row = K_p + (long)phys_cell * args.nKVHeads * args.packedBytes;
+            const int safe_phys_cell = in_range ? phys_cell : 0;
+            device const uint8_t * packed_row = K_p + (long)safe_phys_cell * args.nKVHeads * args.packedBytes;
             const float rms_scale = in_range ? K_sc[phys_cell * args.nKVHeads] : 0.0f;
             const float zero_val = (args.asymmetric && K_zr && in_range)
                 ? K_zr[(long)phys_cell * args.nKVHeads] : 0.0f;
@@ -15359,7 +15361,8 @@ kernel void kernel_tq_fattn_vec_f16_d256(
 
             // Hoist K decode out of the j loop. See kernel_tq_fattn_vec_f16
             // for full rationale.
-            device const uint8_t * packed_row = K_p + (long)phys_cell * args.nKVHeads * args.packedBytes;
+            const int safe_phys_cell = in_range ? phys_cell : 0;
+            device const uint8_t * packed_row = K_p + (long)safe_phys_cell * args.nKVHeads * args.packedBytes;
             const float rms_scale = in_range ? K_sc[phys_cell * args.nKVHeads] : 0.0f;
             const float zero_val = (args.asymmetric && K_zr && in_range)
                 ? K_zr[(long)phys_cell * args.nKVHeads] : 0.0f;
@@ -15718,16 +15721,17 @@ kernel void kernel_tq_fattn_vec_packed(
 
             // Hoist K decode out of the j loop. See kernel_tq_fattn_vec_f16
             // for full rationale.
-            device const uint8_t * packed_row = K_p + (long)phys_cell * args.nKVHeads * args.packedBytes;
+            const int safe_phys_cell = in_range ? phys_cell : 0;
+            device const uint8_t * packed_row = K_p + (long)safe_phys_cell * args.nKVHeads * args.packedBytes;
             const float rms_scale = in_range ? K_sc[phys_cell * args.nKVHeads] : 0.0f;
             const float zero_val = (args.asymmetric && K_zr && in_range)
                 ? K_zr[(long)phys_cell * args.nKVHeads] : 0.0f;
 
             // Outlier per-cell setup.
-            device const uint8_t * o_row   = O_p + (long)phys_cell * args.nKVHeads * args.outlierPackedBytes;
+            device const uint8_t * o_row   = O_p + (long)safe_phys_cell * args.nKVHeads * args.outlierPackedBytes;
             const float o_scale = in_range ? O_sc[phys_cell * args.nKVHeads] : 0.0f;
             const float o_zero  = (args.asymmetric && in_range) ? O_zr[phys_cell * args.nKVHeads] : 0.0f;
-            device const ushort * o_idx_row = O_idx + (long)phys_cell * args.nKVHeads * args.outlierCount;
+            device const ushort * o_idx_row = O_idx + (long)safe_phys_cell * args.nKVHeads * args.outlierCount;
 
             // Build bmap (D=128 → 4 words) and sum_q_outl, reduced across KQ group.
             // Each of the 8 KQ-group threads loads outlierCount/8 indices.
@@ -16140,15 +16144,16 @@ kernel void kernel_tq_fattn_vec_packed_d64(
 
             // Hoist K decode out of the j loop. See kernel_tq_fattn_vec_f16
             // for full rationale.
-            device const uint8_t * packed_row = K_p + (long)phys_cell * args.nKVHeads * args.packedBytes;
+            const int safe_phys_cell = in_range ? phys_cell : 0;
+            device const uint8_t * packed_row = K_p + (long)safe_phys_cell * args.nKVHeads * args.packedBytes;
             const float rms_scale = in_range ? K_sc[phys_cell * args.nKVHeads] : 0.0f;
             const float zero_val = (args.asymmetric && K_zr && in_range)
                 ? K_zr[(long)phys_cell * args.nKVHeads] : 0.0f;
 
-            device const uint8_t * o_row   = O_p + (long)phys_cell * args.nKVHeads * args.outlierPackedBytes;
+            device const uint8_t * o_row   = O_p + (long)safe_phys_cell * args.nKVHeads * args.outlierPackedBytes;
             const float o_scale = in_range ? O_sc[phys_cell * args.nKVHeads] : 0.0f;
             const float o_zero  = (args.asymmetric && in_range) ? O_zr[phys_cell * args.nKVHeads] : 0.0f;
-            device const ushort * o_idx_row = O_idx + (long)phys_cell * args.nKVHeads * args.outlierCount;
+            device const ushort * o_idx_row = O_idx + (long)safe_phys_cell * args.nKVHeads * args.outlierCount;
 
             // D=64 bmap: 2 words covering positions 0..63.
             uint bmap[2] = {0u, 0u};
@@ -16550,15 +16555,16 @@ kernel void kernel_tq_fattn_vec_packed_d256(
 
             // Hoist K decode out of the j loop. See kernel_tq_fattn_vec_f16
             // for full rationale.
-            device const uint8_t * packed_row = K_p + (long)phys_cell * args.nKVHeads * args.packedBytes;
+            const int safe_phys_cell = in_range ? phys_cell : 0;
+            device const uint8_t * packed_row = K_p + (long)safe_phys_cell * args.nKVHeads * args.packedBytes;
             const float rms_scale = in_range ? K_sc[phys_cell * args.nKVHeads] : 0.0f;
             const float zero_val = (args.asymmetric && K_zr && in_range)
                 ? K_zr[(long)phys_cell * args.nKVHeads] : 0.0f;
 
-            device const uint8_t * o_row   = O_p + (long)phys_cell * args.nKVHeads * args.outlierPackedBytes;
+            device const uint8_t * o_row   = O_p + (long)safe_phys_cell * args.nKVHeads * args.outlierPackedBytes;
             const float o_scale = in_range ? O_sc[phys_cell * args.nKVHeads] : 0.0f;
             const float o_zero  = (args.asymmetric && in_range) ? O_zr[phys_cell * args.nKVHeads] : 0.0f;
-            device const ushort * o_idx_row = O_idx + (long)phys_cell * args.nKVHeads * args.outlierCount;
+            device const ushort * o_idx_row = O_idx + (long)safe_phys_cell * args.nKVHeads * args.outlierCount;
 
             // D=256 bmap: 8 words covering positions 0..255.
             uint bmap[8] = {0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u};
@@ -16947,7 +16953,8 @@ kernel void kernel_tq_fattn_vec_f16_d512(
             const int phys_cell = (args.hasLocs && cell_rel < args.nCells) ? locs[cell_rel] : cell_rel;
             const bool in_range = (cell_rel < args.nCells);
 
-            device const uint8_t * packed_row = K_p + (long)phys_cell * args.nKVHeads * args.packedBytes;
+            const int safe_phys_cell = in_range ? phys_cell : 0;
+            device const uint8_t * packed_row = K_p + (long)safe_phys_cell * args.nKVHeads * args.packedBytes;
             const float rms_scale = in_range ? K_sc[phys_cell * args.nKVHeads] : 0.0f;
             const float zero_val = (args.asymmetric && K_zr && in_range)
                 ? K_zr[(long)phys_cell * args.nKVHeads] : 0.0f;
@@ -17297,15 +17304,16 @@ kernel void kernel_tq_fattn_vec_packed_d512(
             const int phys_cell = (args.hasLocs && cell_rel < args.nCells) ? locs[cell_rel] : cell_rel;
             const bool in_range = (cell_rel < args.nCells);
 
-            device const uint8_t * packed_row = K_p + (long)phys_cell * args.nKVHeads * args.packedBytes;
+            const int safe_phys_cell = in_range ? phys_cell : 0;
+            device const uint8_t * packed_row = K_p + (long)safe_phys_cell * args.nKVHeads * args.packedBytes;
             const float rms_scale = in_range ? K_sc[phys_cell * args.nKVHeads] : 0.0f;
             const float zero_val = (args.asymmetric && K_zr && in_range)
                 ? K_zr[(long)phys_cell * args.nKVHeads] : 0.0f;
 
-            device const uint8_t * o_row   = O_p + (long)phys_cell * args.nKVHeads * args.outlierPackedBytes;
+            device const uint8_t * o_row   = O_p + (long)safe_phys_cell * args.nKVHeads * args.outlierPackedBytes;
             const float o_scale = in_range ? O_sc[phys_cell * args.nKVHeads] : 0.0f;
             const float o_zero  = (args.asymmetric && in_range) ? O_zr[phys_cell * args.nKVHeads] : 0.0f;
-            device const ushort * o_idx_row = O_idx + (long)phys_cell * args.nKVHeads * args.outlierCount;
+            device const ushort * o_idx_row = O_idx + (long)safe_phys_cell * args.nKVHeads * args.outlierCount;
 
             // D=512 bmap: 16 words covering positions 0..511.
             uint bmap[16] = {0u,0u,0u,0u,0u,0u,0u,0u,0u,0u,0u,0u,0u,0u,0u,0u};
@@ -17764,11 +17772,12 @@ kernel void kernel_tq_fattn_vec_f16_outlier(
             }
 
             // Per-cell scalars.
-            device const uint8_t * packed_row = K_p + (long)phys_cell * args.nKVHeads * args.packedBytes;
+            const int safe_phys_cell = in_range ? phys_cell : 0;
+            device const uint8_t * packed_row = K_p + (long)safe_phys_cell * args.nKVHeads * args.packedBytes;
             const float rms_scale = in_range ? K_sc[phys_cell * args.nKVHeads] : 0.0f;
             const float zero_val = (args.asymmetric && K_zr && in_range)
                 ? K_zr[(long)phys_cell * args.nKVHeads] : 0.0f;
-            device const uint8_t * o_packed_row = outl_p + (long)phys_cell * args.nKVHeads * args.outlierPackedBytes;
+            device const uint8_t * o_packed_row = outl_p + (long)safe_phys_cell * args.nKVHeads * args.outlierPackedBytes;
             const float o_rms = in_range ? outl_sc[phys_cell * args.nKVHeads] : 0.0f;
             const float out_zero_val = (outl_zr && in_range)
                 ? outl_zr[(long)phys_cell * args.nKVHeads] : 0.0f;
@@ -18186,11 +18195,12 @@ kernel void kernel_tq_fattn_vec_f16_outlier_d64(
                 }
             }
 
-            device const uint8_t * packed_row = K_p + (long)phys_cell * args.nKVHeads * args.packedBytes;
+            const int safe_phys_cell = in_range ? phys_cell : 0;
+            device const uint8_t * packed_row = K_p + (long)safe_phys_cell * args.nKVHeads * args.packedBytes;
             const float rms_scale = in_range ? K_sc[phys_cell * args.nKVHeads] : 0.0f;
             const float zero_val = (args.asymmetric && K_zr && in_range)
                 ? K_zr[(long)phys_cell * args.nKVHeads] : 0.0f;
-            device const uint8_t * o_packed_row = outl_p + (long)phys_cell * args.nKVHeads * args.outlierPackedBytes;
+            device const uint8_t * o_packed_row = outl_p + (long)safe_phys_cell * args.nKVHeads * args.outlierPackedBytes;
             const float o_rms = in_range ? outl_sc[phys_cell * args.nKVHeads] : 0.0f;
             const float out_zero_val = (outl_zr && in_range)
                 ? outl_zr[(long)phys_cell * args.nKVHeads] : 0.0f;
@@ -18590,11 +18600,12 @@ kernel void kernel_tq_fattn_vec_f16_outlier_d256(
                 }
             }
 
-            device const uint8_t * packed_row = K_p + (long)phys_cell * args.nKVHeads * args.packedBytes;
+            const int safe_phys_cell = in_range ? phys_cell : 0;
+            device const uint8_t * packed_row = K_p + (long)safe_phys_cell * args.nKVHeads * args.packedBytes;
             const float rms_scale = in_range ? K_sc[phys_cell * args.nKVHeads] : 0.0f;
             const float zero_val = (args.asymmetric && K_zr && in_range)
                 ? K_zr[(long)phys_cell * args.nKVHeads] : 0.0f;
-            device const uint8_t * o_packed_row = outl_p + (long)phys_cell * args.nKVHeads * args.outlierPackedBytes;
+            device const uint8_t * o_packed_row = outl_p + (long)safe_phys_cell * args.nKVHeads * args.outlierPackedBytes;
             const float o_rms = in_range ? outl_sc[phys_cell * args.nKVHeads] : 0.0f;
             const float out_zero_val = (outl_zr && in_range)
                 ? outl_zr[(long)phys_cell * args.nKVHeads] : 0.0f;
@@ -19012,11 +19023,12 @@ kernel void kernel_tq_fattn_vec_f16_outlier_d512(
                 }
             }
 
-            device const uint8_t * packed_row = K_p + (long)phys_cell * args.nKVHeads * args.packedBytes;
+            const int safe_phys_cell = in_range ? phys_cell : 0;
+            device const uint8_t * packed_row = K_p + (long)safe_phys_cell * args.nKVHeads * args.packedBytes;
             const float rms_scale = in_range ? K_sc[phys_cell * args.nKVHeads] : 0.0f;
             const float zero_val = (args.asymmetric && K_zr && in_range)
                 ? K_zr[(long)phys_cell * args.nKVHeads] : 0.0f;
-            device const uint8_t * o_packed_row = outl_p + (long)phys_cell * args.nKVHeads * args.outlierPackedBytes;
+            device const uint8_t * o_packed_row = outl_p + (long)safe_phys_cell * args.nKVHeads * args.outlierPackedBytes;
             const float o_rms = in_range ? outl_sc[phys_cell * args.nKVHeads] : 0.0f;
             const float out_zero_val = (outl_zr && in_range)
                 ? outl_zr[(long)phys_cell * args.nKVHeads] : 0.0f;
@@ -19435,11 +19447,12 @@ kernel void kernel_tq_fattn_vec_packed_outlier(
                 }
             }
 
-            device const uint8_t * packed_row = K_p + (long)phys_cell * args.nKVHeads * args.packedBytes;
+            const int safe_phys_cell = in_range ? phys_cell : 0;
+            device const uint8_t * packed_row = K_p + (long)safe_phys_cell * args.nKVHeads * args.packedBytes;
             const float rms_scale = in_range ? K_sc[phys_cell * args.nKVHeads] : 0.0f;
             const float zero_val = (args.asymmetric && K_zr && in_range)
                 ? K_zr[(long)phys_cell * args.nKVHeads] : 0.0f;
-            device const uint8_t * o_packed_row = outl_p + (long)phys_cell * args.nKVHeads * args.outlierPackedBytes;
+            device const uint8_t * o_packed_row = outl_p + (long)safe_phys_cell * args.nKVHeads * args.outlierPackedBytes;
             const float o_rms = in_range ? outl_sc[phys_cell * args.nKVHeads] : 0.0f;
             const float out_zero_val = (outl_zr && in_range)
                 ? outl_zr[(long)phys_cell * args.nKVHeads] : 0.0f;
@@ -19851,11 +19864,12 @@ kernel void kernel_tq_fattn_vec_packed_outlier_d64(
                 }
             }
 
-            device const uint8_t * packed_row = K_p + (long)phys_cell * args.nKVHeads * args.packedBytes;
+            const int safe_phys_cell = in_range ? phys_cell : 0;
+            device const uint8_t * packed_row = K_p + (long)safe_phys_cell * args.nKVHeads * args.packedBytes;
             const float rms_scale = in_range ? K_sc[phys_cell * args.nKVHeads] : 0.0f;
             const float zero_val = (args.asymmetric && K_zr && in_range)
                 ? K_zr[(long)phys_cell * args.nKVHeads] : 0.0f;
-            device const uint8_t * o_packed_row = outl_p + (long)phys_cell * args.nKVHeads * args.outlierPackedBytes;
+            device const uint8_t * o_packed_row = outl_p + (long)safe_phys_cell * args.nKVHeads * args.outlierPackedBytes;
             const float o_rms = in_range ? outl_sc[phys_cell * args.nKVHeads] : 0.0f;
             const float out_zero_val = (outl_zr && in_range)
                 ? outl_zr[(long)phys_cell * args.nKVHeads] : 0.0f;
@@ -20264,11 +20278,12 @@ kernel void kernel_tq_fattn_vec_packed_outlier_d256(
                 }
             }
 
-            device const uint8_t * packed_row = K_p + (long)phys_cell * args.nKVHeads * args.packedBytes;
+            const int safe_phys_cell = in_range ? phys_cell : 0;
+            device const uint8_t * packed_row = K_p + (long)safe_phys_cell * args.nKVHeads * args.packedBytes;
             const float rms_scale = in_range ? K_sc[phys_cell * args.nKVHeads] : 0.0f;
             const float zero_val = (args.asymmetric && K_zr && in_range)
                 ? K_zr[(long)phys_cell * args.nKVHeads] : 0.0f;
-            device const uint8_t * o_packed_row = outl_p + (long)phys_cell * args.nKVHeads * args.outlierPackedBytes;
+            device const uint8_t * o_packed_row = outl_p + (long)safe_phys_cell * args.nKVHeads * args.outlierPackedBytes;
             const float o_rms = in_range ? outl_sc[phys_cell * args.nKVHeads] : 0.0f;
             const float out_zero_val = (outl_zr && in_range)
                 ? outl_zr[(long)phys_cell * args.nKVHeads] : 0.0f;
@@ -20695,11 +20710,12 @@ kernel void kernel_tq_fattn_vec_packed_outlier_d512(
                 }
             }
 
-            device const uint8_t * packed_row = K_p + (long)phys_cell * args.nKVHeads * args.packedBytes;
+            const int safe_phys_cell = in_range ? phys_cell : 0;
+            device const uint8_t * packed_row = K_p + (long)safe_phys_cell * args.nKVHeads * args.packedBytes;
             const float rms_scale = in_range ? K_sc[phys_cell * args.nKVHeads] : 0.0f;
             const float zero_val = (args.asymmetric && K_zr && in_range)
                 ? K_zr[(long)phys_cell * args.nKVHeads] : 0.0f;
-            device const uint8_t * o_packed_row = outl_p + (long)phys_cell * args.nKVHeads * args.outlierPackedBytes;
+            device const uint8_t * o_packed_row = outl_p + (long)safe_phys_cell * args.nKVHeads * args.outlierPackedBytes;
             const float o_rms = in_range ? outl_sc[phys_cell * args.nKVHeads] : 0.0f;
             const float out_zero_val = (outl_zr && in_range)
                 ? outl_zr[(long)phys_cell * args.nKVHeads] : 0.0f;
