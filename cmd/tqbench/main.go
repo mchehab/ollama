@@ -874,7 +874,7 @@ func main() {
 		binary     = flag.String("binary", "ollama", "Path to ollama binary")
 		modelsStr  = flag.String("models", "llama3.2:3b,llama3.1:8b,qwen2.5:7b", "Comma-separated list of models")
 		contextsStr = flag.String("contexts", "4096,32768,65536", "Comma-separated context sizes")
-		kvModesStr  = flag.String("kv-modes", "f16,tq2,tq3,tq4,tq4k", "Comma-separated KV cache modes")
+		kvModesStr  = flag.String("kv-modes", "f16,tq2,tq3,q4_0,tq4,tq4k", "Comma-separated KV cache modes")
 		epochs     = flag.Int("epochs", 3, "Number of timed epochs per cell")
 		warmup     = flag.Int("warmup", 1, "Number of warmup iterations per cell")
 		predict    = flag.Int("predict", 128, "Number of decode tokens to generate")
